@@ -78,3 +78,50 @@ KPI calculations
 Trend analysis
         ↓
 Insights and recommendations
+
+1. KPI Engine
+2. Trend Engine
+3. Insight Engine
+4. Recommendation Engine
+5. Analytics Repository Refactor
+6. API Response Schemas
+7. Executive Dashboard Refinement
+8. Automated Tests
+9. Documentation and Final Validation
+
+
+Current Flow
+
+Dashboard → FastAPI → AnalyticsEngine → PostgreSQL
+
+New Flow After This Feature
+
+Dashboard → FastAPI → KPI Service → Analytics Repository → PostgreSQL
+                              ↓
+                   KPI result stored in PostgreSQL
+
+
+Create:
+- app/analytics/kpi_service.py
+
+Modify:
+- app/analytics/engine.py
+- app/main.py
+- app/database/models.py
+
+app/analytics/kpi_service.py
+Calculates total tasks, completion rate, pending rate, high-priority backlog, workload by layer, and component distribution.
+
+app/analytics/engine.py
+Delegates KPI calculation to the dedicated KPI service.
+
+app/main.py
+Keeps the GET /analytics/kpis/{dataset_id} endpoint connected to the new service.
+
+app/database/models.py
+Uses the existing DatasetAnalytics table to persist KPI results.
+
+
+COMMANDS
+ python -m streamlit run dashboard/app.py
+ python -m uvicorn app.main:app --reload

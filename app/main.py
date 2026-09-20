@@ -23,6 +23,7 @@ from app.database.connection import SessionLocal
 
 from app.profiling.profiler import DataProfiler
 from app.database.profile_repository import DatasetProfileRepository
+from app.analytics.engine import AnalyticsEngine
 
 app = FastAPI(
     title="InsightFlow AI",
@@ -595,4 +596,34 @@ def preview_dataset(dataset_id: int):
             for row in preview_result
         ]
     }
+
+
+@app.get("/profiles/{dataset_id}")
+def get_dataset_profile(dataset_id: int):
+    return AnalyticsEngine.profile(dataset_id)
+
+
+@app.get("/analytics/statistics/{dataset_id}")
+def get_dataset_statistics(dataset_id: int):
+    return AnalyticsEngine.statistics(dataset_id)
+
+
+@app.get("/analytics/kpis/{dataset_id}")
+def get_dataset_kpis(dataset_id: int):
+    return AnalyticsEngine.kpis(dataset_id)
+
+
+@app.get("/analytics/trends/{dataset_id}")
+def get_dataset_trends(dataset_id: int):
+    return AnalyticsEngine.trends(dataset_id)
+
+
+@app.get("/analytics/insights/{dataset_id}")
+def get_dataset_insights(dataset_id: int):
+    return AnalyticsEngine.insights(dataset_id)
+
+
+@app.get("/analytics/recommendations/{dataset_id}")
+def get_dataset_recommendations(dataset_id: int):
+    return AnalyticsEngine.recommendations(dataset_id)
 
