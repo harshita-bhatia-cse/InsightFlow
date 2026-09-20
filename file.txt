@@ -1,0 +1,80 @@
+1st step 
+
+| Stage | What your code does | Technology/concept |
+|---|---|---|
+| API setup | Runs a backend at `localhost:8000` | FastAPI, Uvicorn |
+| Health check | Confirms that the backend is running | `GET` endpoint |
+| File upload | Accepts only CSV files | `POST`, `UploadFile` |
+| Ingestion | Reads uploaded CSV content | Pandas, `DataFrame` |
+| Validation | Checks expected columns, missing values, duplicates, and duplicate task IDs | Data-quality rules / data contract |
+| Cleaning | Trims text, removes exact duplicate rows, fills selected optional fields | Data transformation |
+| Business rule | Never invents missing `Task_ID` or `Status` values | Required vs optional fields |
+| Quarantine | Separates unsafe records for manual review | Error handling and governance |
+| Output storage | Saves processed and quarantine CSVs | Local file storage |
+| Download | Provides API links to download saved datasets | `FileResponse` |
+| Traceability | Gives every upload a unique `run_id` | UUID |
+
+Architecture 
+Upload CSV
+   ↓
+FastAPI receives the file
+   ↓
+Pandas reads it into a DataFrame
+   ↓
+Validate data quality
+   ↓
+Clean safe fields
+   ↓
+Quarantine unsafe records
+   ↓
+Save downloadable CSV outputs
+
+we connect FastAPI to PostgreSQL using SQLAlchemy.
+FastAPI → SQLAlchemy → PostgreSQL → insightflow_db
+
+NEXT STEP IN LAYER 1
+
+Dataset
+   ↓
+Profiling Engine
+   ↓
+Column Analysis
+   ↓
+Statistics
+   ↓
+Data Quality Metrics
+   ↓
+Profile Report
+
+
+LAYER 1 ENDED AND WE ACHIEVED THE FOLLOWING ARCHITECTURE
+
+CSV Upload
+   ↓
+FastAPI ingestion
+   ↓
+Pandas DataFrame
+   ↓
+Validation and business rules
+   ↓
+Cleaning safe fields
+   ↓
+Quarantine unsafe records
+   ↓
+Store data and metadata in PostgreSQL
+   ↓
+Download cleaned datasets
+   ↓
+Streamlit dashboard and analytics
+
+LAYER 2
+
+Layer 1 trusted data
+        ↓
+Business metrics
+        ↓
+KPI calculations
+        ↓
+Trend analysis
+        ↓
+Insights and recommendations
