@@ -153,3 +153,5 @@ class TrendService:
             }
             for period, count in counts.items()
         ]
+
+    

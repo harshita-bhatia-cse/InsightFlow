@@ -2,6 +2,13 @@ from __future__ import annotations
 from app.analytics.kpi_service import KPIService
 from app.analytics.trend_service import TrendService
 from app.analytics.insight_service import InsightService
+from app.analytics.quality_service import QualityService
+from app.analytics.recommendation_service import (
+    RecommendationService
+)
+from app.analytics.analytics_repository import (
+    AnalyticsRepository
+)
 import math
 import re
 from datetime import date, datetime
@@ -13,8 +20,10 @@ from fastapi import HTTPException
 from sqlalchemy import text
 
 from app.database.connection import SessionLocal, engine
-from app.database.models import Dataset, DatasetAnalytics, DatasetInsight, DatasetRecommendation
-
+from app.database.models import (
+    Dataset,
+    PipelineRun,
+)
 SAFE_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 COMPLETED_VALUES = {"completed", "complete", "done", "closed"}
 
@@ -55,6 +64,76 @@ class AnalyticsEngine:
                   "datetime_columns": [str(c) for c in datetime_columns], "columns": columns}
         AnalyticsEngine._save_analysis(dataset_id, "profile", result)
         return result
+
+
+    @staticmethod
+    def quality(dataset_id: int) -> dict[str, Any]:
+        """
+        Calculate and persist the data-quality score for a dataset.
+        """
+        dataset, dataframe = AnalyticsEngine.load_dataset(
+            dataset_id
+        )
+
+        session = SessionLocal()
+
+        try:
+            pipeline_run = (
+                session.query(PipelineRun)
+                .filter(
+                    PipelineRun.filename == dataset["filename"]
+                )
+                .order_by(
+                    PipelineRun.created_at.desc()
+                )
+                .first()
+            )
+
+            if pipeline_run is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Pipeline metadata was not found "
+                        "for this dataset."
+                    )
+                )
+
+            pipeline_run_data = {
+                "original_rows": (
+                    pipeline_run.original_rows
+                ),
+                "ready_rows": pipeline_run.ready_rows,
+                "quarantined_rows": (
+                    pipeline_run.quarantined_rows
+                ),
+                "validation_report": (
+                    pipeline_run.validation_report
+                ),
+            }
+
+        finally:
+            session.close()
+
+        quality_result = QualityService.calculate(
+            pipeline_run=pipeline_run_data,
+            dataset_rows=len(dataframe),
+        )
+
+        quality_result.update(
+            {
+                "dataset_id": dataset["id"],
+                "filename": dataset["filename"],
+                "table_name": dataset["table_name"],
+            }
+        )
+
+        AnalyticsEngine._save_analysis(
+            dataset_id=dataset_id,
+            analysis_type="quality",
+            result=quality_result,
+        )
+
+        return quality_result
 
     @staticmethod
     def statistics(dataset_id: int) -> dict[str, Any]:
@@ -135,54 +214,58 @@ class AnalyticsEngine:
 
     @staticmethod
     def recommendations(dataset_id: int) -> dict[str, Any]:
-        kpis = AnalyticsEngine.kpis(dataset_id); items: list[dict[str, str]] = []
-        workload = kpis["layer_workload_distribution"]
-        if workload:
-            top = max(workload, key=lambda item: item["estimated_hours"])
-            items.append({"priority": "medium", "recommendation": f"Review capacity in {top['name']}.", "rationale": f"It carries {top['estimated_hours']:.1f} estimated hours, the highest workload."})
-        if kpis["high_priority_pending_tasks"]:
-            items.append({"priority": "high", "recommendation": "Prioritize high-risk pending tasks in the next planning cycle.", "rationale": f"{kpis['high_priority_pending_tasks']} high-priority tasks are still open."})
-        if kpis["completion_rate"] < 70:
-            items.append({"priority": "high", "recommendation": "Create a recovery plan for incomplete tasks.", "rationale": f"Current completion rate is {kpis['completion_rate']:.1f}% versus a 70% target."})
-        AnalyticsEngine._replace_recommendations(dataset_id, items)
-        return {"dataset_id": dataset_id, "recommendations": items}
+        """
+        Generate and persist recommendations for a dataset.
+        """
+        kpi_data = AnalyticsEngine.kpis(
+            dataset_id
+        )
+
+        items = RecommendationService.generate(
+            kpi_data=kpi_data,
+        )
+
+        AnalyticsEngine._replace_recommendations(
+            dataset_id,
+            items,
+        )
+
+        return {
+            "dataset_id": dataset_id,
+            "recommendations": items,
+        }
 
     @staticmethod
-    def _save_analysis(dataset_id: int, analysis_type: str, result: dict[str, Any]) -> None:
-        session = SessionLocal()
-        try:
-            row = session.query(DatasetAnalytics).filter_by(dataset_id=dataset_id, analysis_type=analysis_type).one_or_none()
-            if row is None: session.add(DatasetAnalytics(dataset_id=dataset_id, analysis_type=analysis_type, result_data=_json_safe(result)))
-            else: row.result_data = _json_safe(result)
-            session.commit()
-        finally: session.close()
+    def _save_analysis(
+        dataset_id: int,
+        analysis_type: str,
+        result: dict[str, Any],
+    ) -> None:
+        AnalyticsRepository.save_analysis(
+            dataset_id=dataset_id,
+            analysis_type=analysis_type,
+            result=_json_safe(result),
+        )
 
     @staticmethod
-    def _replace_insights(dataset_id: int, items: list[dict[str, str]]) -> None:
-        session = SessionLocal()
-        try:
-            session.query(DatasetInsight).filter_by(dataset_id=dataset_id).delete()
-            session.add_all(
-                [
-                    DatasetInsight(
-                        dataset_id=dataset_id,
-                        severity=item["severity"],
-                        title=item["title"],
-                        message=item["message"],
-                    )
-                    for item in items
-                ]
-            )
-            session.commit()
-        finally: session.close()
+    def _replace_insights(
+        dataset_id: int,
+        items: list[dict[str, Any]],
+    ) -> None:
+        AnalyticsRepository.replace_insights(
+            dataset_id=dataset_id,
+            insights=items,
+        )
 
     @staticmethod
-    def _replace_recommendations(dataset_id: int, items: list[dict[str, str]]) -> None:
-        session = SessionLocal()
-        try:
-            session.query(DatasetRecommendation).filter_by(dataset_id=dataset_id).delete()
-            session.add_all([DatasetRecommendation(dataset_id=dataset_id, **item) for item in items]); session.commit()
-        finally: session.close()
+    def _replace_recommendations(
+        dataset_id: int,
+        items: list[dict[str, Any]],
+    ) -> None:
+        AnalyticsRepository.replace_recommendations(
+            dataset_id=dataset_id,
+            recommendations=items,
+        )
 
 
 def _normalised_column(dataframe: pd.DataFrame, name: str) -> pd.Series | None:

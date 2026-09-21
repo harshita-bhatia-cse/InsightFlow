@@ -244,17 +244,14 @@ http://localhost:8501
 The dashboard currently:
 
 - Checks backend and database connectivity
-- Shows total uploads
-- Shows original, ready, and quarantined row totals
-- Displays pipeline run history
-- Displays upload quality status as a chart
+- Supports CSV upload and processing
 - Lists stored datasets
 - Allows selecting a dataset
-- Shows up to 20 preview rows
-- Shows task counts by status
-- Shows task counts by priority
-- Shows task counts by layer
-- Shows total estimated hours for the displayed preview
+- Provides an executive dashboard with delivery KPIs
+- Visualizes completion status, workload by layer, and task status mix
+- Displays data-quality score, grade, and quarantine rate
+- Presents rule-based insights and prioritized recommendations
+- Provides profile, quality, statistics, KPI, trend, insight, and recommendation pages
 
 ## API endpoints
 
@@ -268,6 +265,13 @@ The dashboard currently:
 | `GET` | `/pipeline-runs` | List pipeline run history |
 | `GET` | `/datasets` | List stored datasets |
 | `GET` | `/datasets/{dataset_id}/preview` | Preview up to 20 stored rows |
+| `GET` | `/profiles/{dataset_id}` | Return the dataset profile |
+| `GET` | `/analytics/quality/{dataset_id}` | Calculate the data-quality score |
+| `GET` | `/analytics/statistics/{dataset_id}` | Return numeric statistics and outliers |
+| `GET` | `/analytics/kpis/{dataset_id}` | Return task and workload KPIs |
+| `GET` | `/analytics/trends/{dataset_id}` | Return categorical and time trends |
+| `GET` | `/analytics/insights/{dataset_id}` | Return rule-based insights |
+| `GET` | `/analytics/recommendations/{dataset_id}` | Return prioritized recommendations |
 
 ## Upload workflow
 
@@ -288,35 +292,41 @@ The upload endpoint performs this sequence:
 13. Save pipeline, dataset, and profile metadata.
 14. Return summaries, previews, reports, and download links.
 
+## Running tests
+
+Run the complete automated test suite from the project root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -v
+
+
+Save the file.
+
+## 4. Start and verify FastAPI
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
 ## Current limitations
 
 The following functionality is not complete yet:
 
-- Direct CSV upload from the Streamlit dashboard
-- Full profile-report dashboard
-- Advanced column statistics
-- Analytics over the complete dataset rather than the 20-row preview
-- Time-based trend analysis
-- Business KPI engine
-- Recommendations and AI-generated insights
 - User authentication and authorization
 - Automated test suite
 - Database migration system
 - Production deployment configuration
-- Reproducible dependency manifest
+- Historical trend tracking across multiple dataset versions
+- LLM-generated insights and recommendations
 
 ## Next development milestones
 
 Recommended next steps:
 
-1. Add a profile retrieval API and profile section to the dashboard.
-2. Calculate analytics from the full stored dataset, not only the preview.
-3. Add `st.file_uploader()` to the dashboard.
-4. Add business KPIs and trend analysis.
-5. Add insight and recommendation generation.
-6. Add automated tests for validation, cleaning, profiling, and API routes.
-7. Add dependency management and database migrations.
-8. Add authentication before exposing the application beyond local use.
+1. Add automated unit and API tests.
+2. Add database migrations and stronger dataset-to-pipeline relationships.
+3. Add historical trend tracking across dataset versions.
+4. Add authentication before exposing the application beyond local use.
+5. Evaluate LLM-assisted insights and recommendations after rule-based behavior is covered by tests.
 
 ## Project summary
 
@@ -325,3 +335,8 @@ platform. It converts uploaded task CSV files into validated, cleaned,
 profiled, traceable, and queryable datasets, while preserving unsafe records for
 manual review. A Streamlit dashboard provides an initial operational view of
 pipeline quality and task-level analytics.
+
+
+COMMANDS
+ python -m streamlit run dashboard/app.py
+ python -m uvicorn app.main:app --reload

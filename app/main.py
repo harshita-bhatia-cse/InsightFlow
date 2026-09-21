@@ -24,6 +24,15 @@ from app.database.connection import SessionLocal
 from app.profiling.profiler import DataProfiler
 from app.database.profile_repository import DatasetProfileRepository
 from app.analytics.engine import AnalyticsEngine
+from app.schemas import (
+    InsightsResponse,
+    KPIResponse,
+    ProfileResponse,
+    QualityResponse,
+    RecommendationsResponse,
+    StatisticsResponse,
+    TrendResponse,
+)
 
 app = FastAPI(
     title="InsightFlow AI",
@@ -598,32 +607,53 @@ def preview_dataset(dataset_id: int):
     }
 
 
-@app.get("/profiles/{dataset_id}")
+@app.get("/profiles/{dataset_id}", response_model=ProfileResponse)
 def get_dataset_profile(dataset_id: int):
     return AnalyticsEngine.profile(dataset_id)
 
+@app.get(
+    "/analytics/quality/{dataset_id}",
+    response_model=QualityResponse,
+)
+def get_dataset_quality(dataset_id: int):
+    return AnalyticsEngine.quality(dataset_id)
 
-@app.get("/analytics/statistics/{dataset_id}")
+
+@app.get(
+    "/analytics/statistics/{dataset_id}",
+    response_model=StatisticsResponse,
+)
 def get_dataset_statistics(dataset_id: int):
     return AnalyticsEngine.statistics(dataset_id)
 
 
-@app.get("/analytics/kpis/{dataset_id}")
+@app.get(
+    "/analytics/kpis/{dataset_id}",
+    response_model=KPIResponse,
+)
 def get_dataset_kpis(dataset_id: int):
     return AnalyticsEngine.kpis(dataset_id)
 
 
-@app.get("/analytics/trends/{dataset_id}")
+@app.get(
+    "/analytics/trends/{dataset_id}",
+    response_model=TrendResponse,
+)
 def get_dataset_trends(dataset_id: int):
     return AnalyticsEngine.trends(dataset_id)
 
 
-@app.get("/analytics/insights/{dataset_id}")
+@app.get(
+    "/analytics/insights/{dataset_id}",
+    response_model=InsightsResponse,
+)
 def get_dataset_insights(dataset_id: int):
     return AnalyticsEngine.insights(dataset_id)
 
 
-@app.get("/analytics/recommendations/{dataset_id}")
+@app.get(
+    "/analytics/recommendations/{dataset_id}",
+    response_model=RecommendationsResponse,
+)
 def get_dataset_recommendations(dataset_id: int):
     return AnalyticsEngine.recommendations(dataset_id)
-
