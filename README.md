@@ -337,6 +337,23 @@ manual review. A Streamlit dashboard provides an initial operational view of
 pipeline quality and task-level analytics.
 
 
+| `GET` | `/dataset-versions/{filename}` | List uploaded versions of a dataset |
+
+### Analytics Versioning
+
+Each uploaded file is stored as an independent dataset version.
+Every version has its own:
+
+- Database table
+- Pipeline run ID
+- Version number
+- Quality status
+- Row and column counts
+- Creation timestamp
+
+This prevents a new upload from overwriting an earlier analytical dataset.
+
+
 COMMANDS
  python -m streamlit run dashboard/app.py
  python -m uvicorn app.main:app --reload

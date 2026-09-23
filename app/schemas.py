@@ -149,3 +149,28 @@ class Recommendation(BaseModel):
 class RecommendationsResponse(BaseModel):
     dataset_id: int
     recommendations: list[Recommendation]
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    username: str
+    password: str
+    role: str = "viewer"
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    username: str
+    role: str
+
+
+class AuthTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse

@@ -3,7 +3,7 @@ from io import BytesIO
 from pathlib import Path
 import uuid
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 
 from fastapi.responses import FileResponse
 
@@ -16,7 +16,10 @@ from app.database.connection import Base, engine
 
 from app.database.models import (
     PipelineRun,
-    Dataset
+    Dataset,
+    DatasetVersion,
+    QualityMonitoringSnapshot,
+    User,
 )
 
 from app.database.connection import SessionLocal
@@ -24,20 +27,26 @@ from app.database.connection import SessionLocal
 from app.profiling.profiler import DataProfiler
 from app.database.profile_repository import DatasetProfileRepository
 from app.analytics.engine import AnalyticsEngine
+from app.orchestration.processor import AnalyticsWorkflowOrchestrator
+from app.auth import authenticate_user, create_access_token, require_roles, register_user
 from app.schemas import (
+    AuthTokenResponse,
     InsightsResponse,
     KPIResponse,
+    LoginRequest,
     ProfileResponse,
     QualityResponse,
     RecommendationsResponse,
+    RegisterRequest,
     StatisticsResponse,
     TrendResponse,
+    UserResponse,
 )
 
 app = FastAPI(
     title="InsightFlow AI",
-    description="Layer 1: CSV ingestion, validation, and cleaning",
-    version="0.1.0"
+    description="Layer 2 analytics automation with monitoring and orchestration",
+    version="0.2.0",
 )
 Base.metadata.create_all(bind=engine)
 # This is our first Data Contract:
@@ -67,6 +76,72 @@ def home():
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
+
+
+@app.post("/auth/register", response_model=AuthTokenResponse)
+def register_user_route(payload: RegisterRequest):
+    user = register_user(
+        email=payload.email,
+        username=payload.username,
+        password=payload.password,
+        role=payload.role,
+    )
+    return {
+        "access_token": create_access_token(user),
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "role": user.role,
+        },
+    }
+
+
+@app.post("/auth/login", response_model=AuthTokenResponse)
+def login_user_route(payload: LoginRequest):
+    user = authenticate_user(payload.email, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    return {
+        "access_token": create_access_token(user),
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "role": user.role,
+        },
+    }
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def get_current_user_route(current_user: User = Depends(require_roles("admin", "analyst", "viewer", "uploader"))):
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "username": current_user.username,
+        "role": current_user.role,
+    }
+
+
+@app.get("/admin/users", response_model=list[UserResponse])
+def list_users_route(current_user: User = Depends(require_roles("admin"))):
+    database_session = SessionLocal()
+    try:
+        users = database_session.query(User).order_by(User.id.asc()).all()
+        return [
+            {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+                "role": user.role,
+            }
+            for user in users
+        ]
+    finally:
+        database_session.close()
 
 
 def normalize_dataframe(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -369,11 +444,20 @@ async def upload_csv(file: UploadFile = File(...)):
         quarantine_file_path,
         index=False
     )
+    base_table_name = (
+    Path(file.filename)
+    .stem
+    .lower()
+    .replace(" ", "_")
+    )
+
+    run_id_short = run_id.replace(
+        "-",
+        "",
+    )[:12]
+
     table_name = (
-        Path(file.filename)
-        .stem
-        .lower()
-        .replace(" ", "_")
+        f"{base_table_name}_{run_id_short}"
     )
 
     dataset = Dataset(
@@ -401,6 +485,24 @@ async def upload_csv(file: UploadFile = File(...)):
     )
 
     try:
+        latest_version = (
+            database_session.query(
+            DatasetVersion
+        )
+        .filter(
+            DatasetVersion.filename == file.filename
+        )
+        .order_by(
+            DatasetVersion.version_number.desc()
+        )
+        .first()
+        )
+
+        next_version_number = (
+            latest_version.version_number + 1
+            if latest_version is not None
+            else 1
+        )
 
     # Save pipeline run metadata
         pipeline_run = PipelineRun(
@@ -420,6 +522,23 @@ async def upload_csv(file: UploadFile = File(...)):
             columns_count=len(cleaned_dataframe.columns)
         )
         database_session.add(dataset)
+        database_session.flush()
+
+        dataset_version = DatasetVersion(
+            filename=file.filename,
+            version_number=next_version_number,
+            run_id=run_id,
+            dataset_id=dataset.id,
+            table_name=table_name,
+            rows_count=len(cleaned_dataframe),
+            columns_count=len(cleaned_dataframe.columns),
+            quality_status=quality_status,
+        )
+
+        database_session.add(
+            dataset_version
+        )
+
 
         database_session.commit()
 
@@ -433,6 +552,14 @@ async def upload_csv(file: UploadFile = File(...)):
     finally:
         database_session.close()
 
+    try:
+        analytics_result = AnalyticsWorkflowOrchestrator.run_for_dataset(dataset.id)
+    except Exception as error:
+        analytics_result = {
+            "dataset_id": dataset.id,
+            "error": str(error),
+            "status": "analysis_failed",
+        }
 
     return {
         "message": "CSV processed successfully",
@@ -467,9 +594,8 @@ async def upload_csv(file: UploadFile = File(...)):
         ),
         "quarantined_data_preview": dataframe_preview(
             quarantined_dataframe
-        )
-
-        
+        ),
+        "analytics_result": analytics_result,
     }
 
 
@@ -657,3 +783,51 @@ def get_dataset_insights(dataset_id: int):
 )
 def get_dataset_recommendations(dataset_id: int):
     return AnalyticsEngine.recommendations(dataset_id)
+
+
+@app.get("/dataset-versions/{filename}")
+def get_dataset_versions(filename: str):
+    database_session = SessionLocal()
+
+    try:
+        versions = (
+            database_session.query(
+                DatasetVersion
+            )
+            .filter(
+                DatasetVersion.filename == filename
+            )
+            .order_by(
+                DatasetVersion.version_number.desc()
+            )
+            .all()
+        )
+
+        return [
+            {
+                "id": version.id,
+                "filename": version.filename,
+                "version_number": version.version_number,
+                "run_id": version.run_id,
+                "dataset_id": version.dataset_id,
+                "table_name": version.table_name,
+                "rows_count": version.rows_count,
+                "columns_count": version.columns_count,
+                "quality_status": version.quality_status,
+                "created_at": version.created_at,
+            }
+            for version in versions
+        ]
+
+    finally:
+        database_session.close()
+
+
+@app.get("/quality-monitoring/{filename}")
+def get_quality_monitoring_history(filename: str):
+    from app.analytics.quality_monitoring_service import QualityMonitoringService
+
+    return {
+        "filename": filename,
+        "history": QualityMonitoringService.history(filename),
+    }

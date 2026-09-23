@@ -28,3 +28,12 @@ def test_unknown_endpoint_returns_not_found():
     response = client.get("/does-not-exist")
 
     assert response.status_code == 404
+
+
+def test_dataset_versions_endpoint_returns_not_found_for_unknown_file():
+    response = client.get(
+        "/dataset-versions/unknown-file.csv"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == []
