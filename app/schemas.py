@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -169,7 +170,17 @@ class UserResponse(BaseModel):
     username: str
     role: str
 
+class WorkspaceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
 
+
+class WorkspaceResponse(BaseModel):
+    id: int
+    name: str
+    description: str | None = None
+    owner_id: int
+    created_at: datetime
 class AuthTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

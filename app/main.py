@@ -3,32 +3,42 @@ from io import BytesIO
 from pathlib import Path
 import uuid
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from sqlalchemy import text
 
-from app.database.connection import engine
+from app.workspaces.routes import router as workspace_router
+from app.projects.routes import router as project_router
+from app.datasets.routes import router as dataset_router
+from app.permissions.routes import router as permission_router
 
 from app.database.connection import Base, engine
-#from app.database.models import PipelineRun
-
 from app.database.models import (
     PipelineRun,
     Dataset,
     DatasetVersion,
     QualityMonitoringSnapshot,
     User,
+    Project,
+    Workspace,
 )
-
+from app.workspaces.routes import router as workspace_router
 from app.database.connection import SessionLocal
+from app.datasets.services import DatasetService
 
 from app.profiling.profiler import DataProfiler
 from app.database.profile_repository import DatasetProfileRepository
 from app.analytics.engine import AnalyticsEngine
 from app.orchestration.processor import AnalyticsWorkflowOrchestrator
-from app.auth import authenticate_user, create_access_token, require_roles, register_user
+from app.permissions.services import ProjectPermissionService
+from app.auth import (
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    require_roles,
+    register_user,
+)
 from app.schemas import (
     AuthTokenResponse,
     InsightsResponse,
@@ -48,6 +58,16 @@ app = FastAPI(
     description="Layer 2 analytics automation with monitoring and orchestration",
     version="0.2.0",
 )
+
+app.include_router(workspace_router, prefix="/api/workspaces", tags=["workspaces"])
+app.include_router(project_router, prefix="/api/projects", tags=["projects"])
+app.include_router(dataset_router, prefix="/api/datasets", tags=["datasets"])
+app.include_router(
+    permission_router,
+    prefix="/api/permissions",
+    tags=["permissions"],
+)
+
 Base.metadata.create_all(bind=engine)
 # This is our first Data Contract:
 # fields the business considers mandatory for a usable task record.
@@ -356,11 +376,38 @@ def dataframe_preview(dataframe: pd.DataFrame) -> list:
 
 
 @app.post("/upload")
-async def upload_csv(file: UploadFile = File(...)):
+async def upload_csv(
+    file: UploadFile = File(...),
+    project_id: int = Form(...),
+    current_user: User = Depends(get_current_user),
+):
     if not file.filename:
         raise HTTPException(
             status_code=400,
             detail="Please choose a CSV file."
+        )
+
+    database_session = SessionLocal()
+
+    try:
+        permission_service = ProjectPermissionService(
+            database_session
+        )
+
+        can_upload = permission_service.user_can_edit_project(
+            project_id=project_id,
+            user_id=current_user.id,
+        )
+    finally:
+        database_session.close()
+
+    if not can_upload:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Project not found or the current user "
+                "cannot upload to this project."
+            ),
         )
 
     if Path(file.filename).suffix.lower() != ".csv":
@@ -461,10 +508,11 @@ async def upload_csv(file: UploadFile = File(...)):
     )
 
     dataset = Dataset(
-    filename=file.filename,
-    table_name=table_name,
-    rows_count=len(cleaned_dataframe),
-    columns_count=len(cleaned_dataframe.columns)
+        filename=file.filename,
+        table_name=table_name,
+        rows_count=len(cleaned_dataframe),
+        columns_count=len(cleaned_dataframe.columns),
+        project_id=project_id,
     )
 
     #database_session.add(dataset)
@@ -519,11 +567,12 @@ async def upload_csv(file: UploadFile = File(...)):
             filename=file.filename,
             table_name=table_name,
             rows_count=len(cleaned_dataframe),
-            columns_count=len(cleaned_dataframe.columns)
+            columns_count=len(cleaned_dataframe.columns),
+            project_id=project_id,
         )
         database_session.add(dataset)
         database_session.flush()
-
+        dataset_id = dataset.id
         dataset_version = DatasetVersion(
             filename=file.filename,
             version_number=next_version_number,
@@ -552,15 +601,14 @@ async def upload_csv(file: UploadFile = File(...)):
     finally:
         database_session.close()
 
-    try:
-        analytics_result = AnalyticsWorkflowOrchestrator.run_for_dataset(dataset.id)
-    except Exception as error:
-        analytics_result = {
-            "dataset_id": dataset.id,
+        try:
+            analytics_result = AnalyticsWorkflowOrchestrator.run_for_dataset(dataset_id)
+        except Exception as error:
+            analytics_result = {
+            "dataset_id": dataset_id,
             "error": str(error),
             "status": "analysis_failed",
-        }
-
+            }
     return {
         "message": "CSV processed successfully",
         "run_id": run_id,
@@ -667,23 +715,32 @@ def get_pipeline_runs():
         database_session.close()
 
 @app.get("/datasets")
-def get_datasets():
+def get_datasets(
+    current_user: User = Depends(get_current_user),
+):
 
     database_session = SessionLocal()
 
     try:
-        datasets = database_session.query(
-            Dataset
-        ).all()
-
-        return datasets
+        service = DatasetService(database_session)
+        return service.list_datasets_for_user(
+            user_id=current_user.id,
+        )
 
     finally:
         database_session.close()
 
 
 @app.get("/datasets/{dataset_id}/preview")
-def preview_dataset(dataset_id: int):
+def preview_dataset(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
+
     with engine.connect() as connection:
         dataset_result = connection.execute(
             text(
@@ -734,14 +791,62 @@ def preview_dataset(dataset_id: int):
 
 
 @app.get("/profiles/{dataset_id}", response_model=ProfileResponse)
-def get_dataset_profile(dataset_id: int):
+def get_dataset_profile(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.profile(dataset_id)
+
+
+def require_dataset_view_access(
+    dataset_id: int,
+    current_user: User,
+) -> Dataset:
+    database_session = SessionLocal()
+
+    try:
+        dataset = database_session.get(Dataset, dataset_id)
+
+        if dataset is None or dataset.project_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Dataset not found.",
+            )
+
+        permission_service = ProjectPermissionService(
+            database_session
+        )
+
+        if not permission_service.user_can_view_project(
+            project_id=dataset.project_id,
+            user_id=current_user.id,
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Dataset not found.",
+            )
+
+        return dataset
+    finally:
+        database_session.close()
+
 
 @app.get(
     "/analytics/quality/{dataset_id}",
     response_model=QualityResponse,
 )
-def get_dataset_quality(dataset_id: int):
+def get_dataset_quality(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.quality(dataset_id)
 
 
@@ -749,7 +854,14 @@ def get_dataset_quality(dataset_id: int):
     "/analytics/statistics/{dataset_id}",
     response_model=StatisticsResponse,
 )
-def get_dataset_statistics(dataset_id: int):
+def get_dataset_statistics(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.statistics(dataset_id)
 
 
@@ -757,7 +869,14 @@ def get_dataset_statistics(dataset_id: int):
     "/analytics/kpis/{dataset_id}",
     response_model=KPIResponse,
 )
-def get_dataset_kpis(dataset_id: int):
+def get_dataset_kpis(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.kpis(dataset_id)
 
 
@@ -765,7 +884,14 @@ def get_dataset_kpis(dataset_id: int):
     "/analytics/trends/{dataset_id}",
     response_model=TrendResponse,
 )
-def get_dataset_trends(dataset_id: int):
+def get_dataset_trends(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.trends(dataset_id)
 
 
@@ -773,7 +899,14 @@ def get_dataset_trends(dataset_id: int):
     "/analytics/insights/{dataset_id}",
     response_model=InsightsResponse,
 )
-def get_dataset_insights(dataset_id: int):
+def get_dataset_insights(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.insights(dataset_id)
 
 
@@ -781,7 +914,14 @@ def get_dataset_insights(dataset_id: int):
     "/analytics/recommendations/{dataset_id}",
     response_model=RecommendationsResponse,
 )
-def get_dataset_recommendations(dataset_id: int):
+def get_dataset_recommendations(
+    dataset_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    require_dataset_view_access(
+        dataset_id=dataset_id,
+        current_user=current_user,
+    )
     return AnalyticsEngine.recommendations(dataset_id)
 
 

@@ -1,0 +1,762 @@
+# InsightFlow AI - Current Project Status
+
+Last updated: 2026-10-06
+
+## 1. Project overview
+
+InsightFlow AI is a FastAPI and PostgreSQL data platform for uploading project-task CSV files, validating and cleaning the data, quarantining invalid records, generating analytics, and exposing the results through APIs and a dashboard.
+
+The implemented high-level flow is:
+
+```text
+User authentication
+    ↓
+Workspace ownership
+    ↓
+Project ownership
+    ↓
+Project membership and roles
+    ↓
+Authenticated CSV upload
+    ↓
+Validation and cleaning
+    ↓
+Quarantine of invalid records
+    ↓
+PostgreSQL dataset storage
+    ↓
+Dataset-to-project ownership
+    ↓
+Profiling and analytics
+    ↓
+Role-controlled dataset and analytics access
+```
+
+## 2. Overall completion status
+
+```text
+Layer 1 - Ingestion and data engineering       Complete
+Layer 2 - Analytics and BI foundation           Complete
+Layer 3 - Multi-tenant ownership and permissions Complete
+```
+
+The current automated test result is:
+
+```text
+44 passed, 2 warnings
+```
+
+The warnings are dependency deprecation warnings from the FastAPI/Starlette test-client stack. They are not test failures.
+
+## 3. Layer 1 - Ingestion and data engineering
+
+### CSV upload
+
+The backend provides:
+
+```text
+POST /upload
+```
+
+The endpoint:
+
+- Accepts CSV files.
+- Requires authentication.
+- Requires a `project_id` form field.
+- Confirms that the current user can upload to the project.
+- Rejects missing filenames.
+- Rejects non-CSV files.
+- Rejects empty files.
+- Rejects files larger than 5 MB.
+- Reads the CSV with Pandas.
+- Normalizes the dataframe before validation.
+
+The upload request now contains:
+
+```text
+file         CSV file
+project_id   Target project ID
+Authorization Bearer token
+```
+
+### Data contract
+
+The expected CSV columns are:
+
+```text
+Task_ID
+Layer
+Component
+Status
+Priority
+Estimated_Hours
+```
+
+The required business fields are:
+
+```text
+Task_ID
+Status
+```
+
+The validation layer checks:
+
+- Missing expected columns.
+- Unexpected columns.
+- Missing values.
+- Missing required fields.
+- Exact duplicate rows.
+- Duplicate `Task_ID` values.
+
+### Cleaning and quarantine
+
+The pipeline applies conservative cleaning rules:
+
+- Trims column names.
+- Trims string values.
+- Treats empty strings as missing.
+- Removes exact duplicate rows.
+- Fills missing `Layer`, `Component`, and `Priority` values with `Unknown` when appropriate.
+- Fills missing `Estimated_Hours` values with the available median.
+- Does not invent missing `Task_ID` or `Status` values.
+- Sends rows with missing required fields to quarantine.
+- Sends rows with duplicate task IDs to quarantine.
+
+Each upload produces:
+
+```text
+data/processed/{run_id}_ready.csv
+data/quarantine/{run_id}_quarantine.csv
+```
+
+The UUID `run_id` connects the processed file, quarantine file, API response, and database pipeline record.
+
+### Database persistence
+
+For each upload, the system stores:
+
+- Pipeline run metadata.
+- Dataset metadata.
+- Dataset version metadata.
+- Dataset profile data.
+- The cleaned dataset in a dynamically named PostgreSQL table.
+
+The persisted `Dataset` now includes the target `project_id`, so a direct upload is immediately associated with its project.
+
+## 4. Layer 2 - Analytics and BI
+
+Layer 2 is complete and is executed as part of the upload and analytics workflow.
+
+### Profiling
+
+Dataset profiling reports:
+
+- Row count.
+- Column count.
+- Column names.
+- Numeric columns.
+- Categorical columns.
+- Datetime columns.
+- Missing-value counts.
+- Missing-value rates.
+- Unique-value counts.
+- Data types.
+
+Profiles are persisted in the `dataset_profiles` table.
+
+### Analytics services
+
+The analytics package contains services for:
+
+- Quality analysis.
+- KPI calculation.
+- Trend analysis.
+- Insight generation.
+- Recommendation generation.
+- Quality monitoring.
+- Analytics result persistence.
+
+The analytics engine exposes:
+
+```text
+GET /profiles/{dataset_id}
+GET /analytics/quality/{dataset_id}
+GET /analytics/statistics/{dataset_id}
+GET /analytics/kpis/{dataset_id}
+GET /analytics/trends/{dataset_id}
+GET /analytics/insights/{dataset_id}
+GET /analytics/recommendations/{dataset_id}
+```
+
+### Example statistics
+
+For numeric fields such as `Estimated_Hours`, the statistics endpoint can return:
+
+- Mean.
+- Median.
+- Standard deviation.
+- Minimum.
+- Maximum.
+- Count.
+- Correlation matrix.
+- Outlier counts and rates.
+
+### Orchestration
+
+`AnalyticsWorkflowOrchestrator` runs the analytics workflow for a persisted dataset after upload. The upload response includes the generated analytics result and dataset identifier.
+
+### Alerts and exports
+
+The project also includes services for:
+
+- Alert generation.
+- Export handling.
+- Quality-monitoring snapshots.
+
+## 5. Authentication and RBAC foundation
+
+Authentication is implemented in `app/auth.py`.
+
+Supported behavior includes:
+
+- User registration.
+- Password hashing with PBKDF2-SHA256.
+- Password verification.
+- Signed access-token creation.
+- Token signature validation.
+- Token expiration validation.
+- Current-user lookup.
+- Role-based route dependency support.
+- FastAPI Bearer authentication for Swagger.
+
+Authentication endpoints:
+
+```text
+POST /auth/register
+POST /auth/login
+GET  /auth/me
+GET  /admin/users
+```
+
+Swagger authorization workflow:
+
+1. Call `POST /auth/login`.
+2. Copy only the raw `access_token`.
+3. Click Swagger's `Authorize` button.
+4. Paste only the token.
+5. Do not add `Bearer`; Swagger adds it automatically.
+
+## 6. Layer 3 - Workspace and project ownership
+
+### Ownership chain
+
+The current tenant ownership chain is:
+
+```text
+User
+  ↓ owner_id
+Workspace
+  ↓ workspace_id
+Project
+  ↓ project_id
+Dataset
+```
+
+### Workspace management
+
+Workspace endpoints:
+
+```text
+POST   /api/workspaces
+GET    /api/workspaces
+GET    /api/workspaces/{workspace_id}
+DELETE /api/workspaces/{workspace_id}
+```
+
+Workspace behavior:
+
+- Workspaces belong to users.
+- Users can list their own workspaces.
+- Users can retrieve their own workspaces.
+- Users can delete their own workspaces.
+- Workspace ownership is checked on every protected operation.
+
+### Project management
+
+Project endpoints:
+
+```text
+POST   /api/projects
+GET    /api/projects
+GET    /api/projects/{project_id}
+DELETE /api/projects/{project_id}
+```
+
+Project behavior:
+
+- Projects belong to workspaces.
+- A user can create projects only inside a workspace they own.
+- A user can list and retrieve only projects in owned workspaces.
+- A user cannot create a project in another user's workspace.
+- Project deletion is ownership-protected.
+
+## 7. Dataset ownership
+
+Dataset ownership endpoints:
+
+```text
+PATCH /api/datasets/{dataset_id}/project
+GET   /api/datasets
+GET   /api/datasets/{dataset_id}
+```
+
+Dataset behavior:
+
+- A dataset can be linked to a project.
+- `project_id` is nullable for compatibility with older dataset rows.
+- Dataset assignment checks project ownership.
+- Dataset listing is now permission-aware.
+- Dataset retrieval is now permission-aware.
+- Members with view access can retrieve datasets in their projects.
+- Unrelated users receive `404 Dataset not found`.
+
+The older workflow was:
+
+```text
+Upload CSV
+    ↓
+PATCH dataset to project
+```
+
+The current preferred workflow is:
+
+```text
+Upload CSV with project_id
+    ↓
+Dataset is persisted directly under that project
+```
+
+## 8. Project-member permissions
+
+The project-member permission system is implemented in:
+
+```text
+app/permissions/models through app/database/models.py
+app/permissions/schemas.py
+app/permissions/services.py
+app/permissions/routes.py
+```
+
+### ProjectMember model
+
+The `project_members` table connects users and projects.
+
+Stored fields:
+
+```text
+id
+project_id
+user_id
+role
+created_at
+```
+
+The database enforces one membership per project-user pair with a unique constraint.
+
+### Supported project roles
+
+```text
+viewer
+analyst
+editor
+owner
+```
+
+### Permission endpoints
+
+```text
+POST   /api/permissions/projects/{project_id}/members
+GET    /api/permissions/projects/{project_id}/members
+PATCH  /api/permissions/projects/{project_id}/members/{user_id}
+DELETE /api/permissions/projects/{project_id}/members/{user_id}
+```
+
+These endpoints allow the project owner to:
+
+- Add a member.
+- List members.
+- Change a member role.
+- Remove a member.
+
+The API rejects:
+
+- Unknown users.
+- Duplicate memberships.
+- Invalid role names.
+- Member-management attempts by non-owners.
+
+### Effective role resolution
+
+The permission service resolves access in this order:
+
+```text
+Workspace owner → owner
+Project member  → assigned member role
+Other user      → no project access
+```
+
+Reusable checks include:
+
+```text
+user_can_view_project
+user_can_edit_project
+user_can_manage_project
+```
+
+## 9. Current permission behavior
+
+### Viewer
+
+```text
+Can view project datasets.
+Can view project analytics.
+Cannot upload datasets.
+Cannot manage project members.
+```
+
+### Analyst
+
+```text
+Can view project datasets.
+Can view project analytics.
+Cannot upload datasets.
+Cannot manage project members.
+```
+
+### Editor
+
+```text
+Can view project datasets.
+Can view project analytics.
+Can upload datasets.
+Cannot manage project members.
+```
+
+### Owner
+
+```text
+Can view project datasets.
+Can view project analytics.
+Can upload datasets.
+Can add project members.
+Can list project members.
+Can update member roles.
+Can remove project members.
+```
+
+### Protected analytics
+
+Analytics routes require authentication and project-level view access:
+
+```text
+viewer/analyst/editor/owner → allowed
+unrelated authenticated user → 404
+unauthenticated user → 401
+```
+
+## 10. Important current API surfaces
+
+### System endpoints
+
+```text
+GET /
+GET /health
+GET /database-health
+```
+
+### File and pipeline endpoints
+
+```text
+POST /upload
+GET  /downloads/{run_id}/{dataset_type}
+GET  /pipeline-runs
+GET  /dataset-versions/{filename}
+```
+
+### Legacy/general dataset endpoints
+
+```text
+GET /datasets
+GET /datasets/{dataset_id}/preview
+```
+
+The ownership-aware dataset routes are under `/api/datasets`. The older general dataset routes remain for existing functionality and should be reviewed in a future security-hardening pass if they are exposed to untrusted clients.
+
+### Monitoring
+
+```text
+GET /quality-monitoring/{filename}
+```
+
+## 11. Important project files
+
+### Application
+
+```text
+app/main.py
+```
+
+Central FastAPI application. It contains authentication routes, the upload pipeline, legacy dataset routes, downloads, pipeline routes, and analytics routes.
+
+### Authentication
+
+```text
+app/auth.py
+```
+
+Contains password hashing, login verification, access-token handling, current-user dependencies, and role dependencies.
+
+### Database
+
+```text
+app/database/connection.py
+app/database/models.py
+app/database/profile_repository.py
+```
+
+Contains SQLAlchemy engine/session setup, database models, and profile persistence.
+
+### Workspace feature
+
+```text
+app/workspaces/schemas.py
+app/workspaces/service.py
+app/workspaces/routes.py
+```
+
+### Project feature
+
+```text
+app/projects/schemas.py
+app/projects/services.py
+app/projects/routes.py
+```
+
+### Dataset feature
+
+```text
+app/datasets/schemas.py
+app/datasets/services.py
+app/datasets/routes.py
+```
+
+### Permission feature
+
+```text
+app/permissions/schemas.py
+app/permissions/services.py
+app/permissions/routes.py
+```
+
+### Analytics
+
+```text
+app/analytics/engine.py
+app/analytics/analytics_repository.py
+app/analytics/kpi_service.py
+app/analytics/trend_service.py
+app/analytics/quality_service.py
+app/analytics/insight_service.py
+app/analytics/recommendation_service.py
+app/analytics/quality_monitoring_service.py
+```
+
+### Supporting services
+
+```text
+app/orchestration/processor.py
+app/profiling/profiler.py
+app/services/alert_service.py
+app/services/export_service.py
+```
+
+## 12. Automated test coverage
+
+The test suite currently covers:
+
+```text
+tests/test_auth.py
+tests/test_workspaces.py
+tests/test_projects.py
+tests/test_datasets.py
+tests/test_permissions.py
+tests/test_api.py
+tests/test_schemas.py
+tests/test_engine.py
+tests/test_kpi_service.py
+tests/test_trend_service.py
+tests/test_quality_service.py
+tests/test_insight_service.py
+tests/test_recommendation_service.py
+tests/test_analytics_repository.py
+```
+
+The tests verify:
+
+- Registration and login.
+- Admin-role protection.
+- Workspace CRUD.
+- Project CRUD.
+- Workspace ownership isolation.
+- Dataset upload.
+- Dataset assignment.
+- Dataset listing and retrieval.
+- Dataset ownership isolation.
+- Project-member CRUD.
+- Duplicate-member rejection.
+- Invalid-role rejection.
+- Non-owner permission rejection.
+- Viewer upload denial.
+- Editor upload approval.
+- Project-member dataset access.
+- Project-member analytics access.
+- Unrelated-user analytics denial.
+- Analytics service behavior.
+- API response schemas.
+
+Run the full suite with:
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m pytest -q
+```
+
+Expected current result:
+
+```text
+44 passed, 2 warnings
+```
+
+## 13. Local development commands
+
+### Start the API
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m uvicorn app.main:app --reload
+```
+
+Swagger:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+### Run focused tests
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m pytest ".\tests\test_datasets.py" -q
+& ".\.venv\Scripts\python.exe" -m pytest ".\tests\test_permissions.py" -q
+```
+
+### Run syntax validation
+
+```powershell
+& ".\.venv\Scripts\python.exe" -m compileall ".\app"
+```
+
+## 14. Database and migration notes
+
+The project currently uses:
+
+```python
+Base.metadata.create_all(bind=engine)
+```
+
+There is no Alembic migration system yet.
+
+Important consequence:
+
+- New tables can be created automatically.
+- New columns are not reliably added to existing tables by `create_all`.
+- The `datasets.project_id` column had to be added manually to the existing PostgreSQL database.
+
+For production-quality development, the next database improvement should be adding Alembic migrations for:
+
+```text
+datasets.project_id
+project_members
+future permission changes
+```
+
+## 15. Known technical debt and follow-up work
+
+### Legacy unprotected routes
+
+The following older routes still exist separately from the ownership-aware APIs:
+
+```text
+GET /datasets
+GET /datasets/{dataset_id}/preview
+GET /pipeline-runs
+GET /profiles/{dataset_id}
+```
+
+The analytics routes are now protected, but the legacy dataset and pipeline routes should be reviewed and either:
+
+- Protected with authentication and project permissions.
+- Moved under the ownership-aware API structure.
+- Marked as internal-only.
+
+### Upload implementation cleanup
+
+The upload function contains an earlier temporary `Dataset` object before the database transaction. The actual persisted object is created inside the transaction. The temporary object should eventually be removed to reduce confusion.
+
+### Session and architecture cleanup
+
+Potential cleanup areas include:
+
+- Consolidating repeated router imports.
+- Standardizing database dependency functions.
+- Moving upload workflow logic out of `main.py` into a dedicated service.
+- Replacing broad exception handling around pipeline stages with structured error handling and logging.
+- Adding explicit response models for more legacy endpoints.
+
+### Authentication hardening
+
+Future production hardening should include:
+
+- Moving the application secret to a required environment variable.
+- Rotating secrets safely.
+- Adding refresh tokens or short-lived access tokens.
+- Adding password reset and account management flows.
+- Avoiding exposure of access tokens in screenshots or logs.
+
+### Permission model improvements
+
+Future permission features could include:
+
+- Workspace-level members.
+- Invitations and invitation expiration.
+- Permission audit logs.
+- Role-change history.
+- Preventing owners from removing the final project owner.
+- Explicit editor permissions for dataset reassignment and deletion.
+- Separate analytics execution permissions from analytics viewing permissions.
+
+## 16. Recommended next development phase
+
+Layer 3 is functionally complete. The recommended next phase is production hardening:
+
+1. Protect or remove the remaining legacy dataset and pipeline routes.
+2. Add Alembic migrations.
+3. Move the upload pipeline into a dedicated service module.
+4. Add permission tests for every legacy route.
+5. Add audit logging for membership and role changes.
+6. Add workspace-level invitations.
+7. Add a frontend workflow for workspace, project, member, dataset, and analytics management.
+8. Add CI execution for the full test suite.
+
+## 17. Handoff summary for the next coding agent
+
+Use this as the compact continuation brief:
+
+> InsightFlow AI has completed Layer 1 ingestion, Layer 2 analytics, and the main Layer 3 multi-tenant ownership and permission system. Authentication, workspaces, projects, dataset ownership, project members, role checks, project-aware uploads, dataset access, analytics access control, and upload restrictions are implemented. Roles are viewer, analyst, editor, and owner. Viewer and analyst can view datasets and analytics. Editor and owner can upload. Owner manages project members. The complete test suite currently passes with 44 tests. Continue with production hardening: protect or consolidate legacy routes, add Alembic migrations, extract the upload pipeline from `app/main.py`, and add audit/invitation workflows.

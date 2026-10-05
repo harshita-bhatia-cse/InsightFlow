@@ -18,6 +18,7 @@ def test_analytics_routes_have_response_models():
     routes = {
         route.path: route
         for route in app.routes
+        if hasattr(route, "path")
     }
 
     for path, expected_model in EXPECTED_RESPONSE_MODELS.items():

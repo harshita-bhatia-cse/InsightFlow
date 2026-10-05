@@ -125,3 +125,9 @@ Uses the existing DatasetAnalytics table to persist KPI results.
 COMMANDS
  python -m streamlit run dashboard/app.py
  python -m uvicorn app.main:app --reload
+
+
+
+ workspace_id - 74
+ id - 46
+ access_toke - eyJzdWIiOiIxNDciLCJlbWFpbCI6InBlcm1pc3Npb25zX293bmVyXzIwMjZAZXhhbXBsZS5jb20iLCJyb2xlIjoiYWRtaW4iLCJleHAiOjE3OTEzMTU0OTd9.sr-PDe-EYqgiQxGh5LUE3vBJwlbH9VQZoThRiDiTaos

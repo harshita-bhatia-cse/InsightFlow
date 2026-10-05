@@ -7,10 +7,22 @@ import streamlit as st
 API_URL = "http://127.0.0.1:8000"
 st.set_page_config(page_title="InsightFlow AI", page_icon="📊", layout="wide")
 
+
+def auth_headers():
+    token = st.session_state.get("access_token")
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 @st.cache_data(ttl=30)
 def api(endpoint: str):
     try:
-        response = requests.get(f"{API_URL}{endpoint}", timeout=15)
+        response = requests.get(
+            f"{API_URL}{endpoint}",
+            headers=auth_headers(),
+            timeout=15,
+        )
         response.raise_for_status()
         return response.json()
     except requests.RequestException as error:
@@ -19,9 +31,12 @@ def api(endpoint: str):
 
 
 def upload_csv(uploaded_file):
+    project_id = st.session_state["selected_project_id"]
     try:
         response = requests.post(
             f"{API_URL}/upload",
+            headers=auth_headers(),
+            data={"project_id": str(project_id)},
             files={
                 "file": (
                     uploaded_file.name,
@@ -36,6 +51,25 @@ def upload_csv(uploaded_file):
     except requests.RequestException as error:
         st.error(f"Upload failed: {error}")
         return None
+
+
+def login(email: str, password: str) -> bool:
+    try:
+        response = requests.post(
+            f"{API_URL}/auth/login",
+            json={"email": email, "password": password},
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        st.error(f"Login failed: {error}")
+        return False
+
+    data = response.json()
+    st.session_state["access_token"] = data["access_token"]
+    st.session_state["current_user"] = data["user"]
+    st.cache_data.clear()
+    return True
 
 
 def chart(items, title, x="name", y="count"):
@@ -105,6 +139,56 @@ def render_action(item, kind):
 
 st.title("InsightFlow AI")
 st.caption("Executive Analytics Dashboard")
+
+if "access_token" not in st.session_state:
+    st.subheader("Sign in")
+    with st.form("login_form"):
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+
+    if submitted and login(email, password):
+        st.rerun()
+    st.stop()
+
+current_user = st.session_state["current_user"]
+st.sidebar.caption(
+    f"Signed in as {current_user['username']} "
+    f"({current_user['role']})"
+)
+
+if st.sidebar.button("Sign out"):
+    st.session_state.pop("access_token", None)
+    st.session_state.pop("current_user", None)
+    st.session_state.pop("selected_project_id", None)
+    st.cache_data.clear()
+    st.rerun()
+
+projects = api("/api/projects")
+if projects is None:
+    st.stop()
+
+if not projects:
+    st.info("No projects are available for this account.")
+    st.stop()
+
+project_ids = [project["id"] for project in projects]
+selected_project_id = st.sidebar.selectbox(
+    "Project",
+    project_ids,
+    index=(
+        project_ids.index(st.session_state["selected_project_id"])
+        if st.session_state.get("selected_project_id") in project_ids
+        else 0
+    ),
+    format_func=lambda value: next(
+        project["name"]
+        for project in projects
+        if project["id"] == value
+    ),
+)
+st.session_state["selected_project_id"] = selected_project_id
+
 if not api("/database-health"):
     st.stop()
 
@@ -133,7 +217,7 @@ if st.sidebar.button("Refresh data"):
     st.cache_data.clear()
     st.rerun()
 
-datasets = api("/datasets")
+datasets = api("/api/datasets")
 if not datasets:
     st.info("No stored datasets found. Upload a CSV through the pipeline first.")
     st.stop()

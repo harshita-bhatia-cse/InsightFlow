@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import base64
 import hashlib
 import hmac
@@ -15,7 +15,7 @@ from app.database.connection import SessionLocal
 from app.database.models import User
 
 APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "insightflow-dev-secret-key")
-
+bearer_scheme = HTTPBearer()
 
 def hash_password(password: str) -> str:
     salt = os.urandom(16)
@@ -147,16 +147,18 @@ def get_current_user_from_token(token: str) -> User:
         session.close()
 
 
-def require_roles(*roles: str):
-    def dependency(authorization: str | None = Header(default=None)):
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Missing bearer token.",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+) -> User:
+    token = credentials.credentials
+    return get_current_user_from_token(token)
 
-        token = authorization.split(" ", 1)[1]
+
+def require_roles(*roles: str):
+    def dependency(
+        credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    ):
+        token = credentials.credentials
         user = get_current_user_from_token(token)
 
         if roles and user.role not in roles:
